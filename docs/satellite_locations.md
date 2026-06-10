@@ -99,7 +99,7 @@ This sequence diagram illustrates real-time coordinate caching, geospatial radiu
 sequenceDiagram
     actor Sat as Satellite Terminal
     participant Django as Django REST API
-    database Redis as Redis Cache
+    participant Redis as Redis Cache
 
     Note over Sat, Redis: Geospatial Positioning & Cache Workflow
 

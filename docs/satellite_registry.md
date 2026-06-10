@@ -85,7 +85,7 @@ This sequence diagram illustrates the registration and retrieval workflow for th
 sequenceDiagram
     actor Admin as System Operator
     participant Django as Django REST API
-    database PG as PostgreSQL DB
+    participant PG as PostgreSQL DB
 
     Note over Admin, PG: Satellite & Ground Station Registry CRUD Workflow
 

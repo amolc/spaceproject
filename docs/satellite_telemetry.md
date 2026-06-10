@@ -102,8 +102,8 @@ This sequence diagram illustrates the telemetry streaming ingestion and lookup w
 sequenceDiagram
     actor Sat as Satellite Terminal
     participant Django as Django REST API
-    database PG as PostgreSQL DB
-    database Mongo as MongoDB Logs
+    participant PG as PostgreSQL DB
+    participant Mongo as MongoDB Logs
 
     Note over Sat, Mongo: Telemetry Logging & Ingestion Workflow
 
