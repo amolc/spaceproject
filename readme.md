@@ -1,0 +1,111 @@
+# Space Internet & Telemetry Tracking System
+
+This is the central repository for the **Space Internet Service Provider & Telemetry Tracking System** (`spaceinternet`). The system consists of a relational registry (PostgreSQL), high-frequency telemetry logs storage (MongoDB), and a real-time geospatial coordinate propagation cache (Redis).
+
+---
+
+## Documentation Index
+* [Master Architecture Specification](file:///Users/amolc/2026/spaceproject/docs/architecture.md)
+* [Relational Registry Component Detail](file:///Users/amolc/2026/spaceproject/docs/satellite_registry.md)
+* [Real-Time Orbital Tracking Detail](file:///Users/amolc/2026/spaceproject/docs/satellite_locations.md)
+* [High-Frequency Telemetry Detail](file:///Users/amolc/2026/spaceproject/docs/satellite_telemetry.md)
+* [Gap Analysis & Open Questions](file:///Users/amolc/2026/spaceproject/docs/questions.md)
+
+---
+
+## How to Create and Set Up the Project
+
+Follow these steps to initialize and build the `spaceinternet` project from scratch.
+
+### 1. Prerequisites
+Ensure the following services are installed and running locally or in your environment:
+* **Python** (version 3.10 or higher recommended)
+* **PostgreSQL**
+* **MongoDB**
+* **Redis**
+
+### 2. Initialize Virtual Environment & Dependencies
+1. Create a Python virtual environment:
+   ```bash
+   python3 -m venv venv
+   ```
+2. Activate the virtual environment:
+   ```bash
+   source venv/bin/activate
+   ```
+3. Install required packages (Django, Django REST Framework, database drivers, and helper libraries):
+   ```bash
+   pip install django djangorestframework psycopg2-binary pymongo redis
+   ```
+
+### 3. Initialize the Django Project
+1. Create the Django project in the current directory:
+   ```bash
+   django-admin startproject spaceinternet .
+   ```
+2. Create Django applications for each database/domain component:
+   * **satellites** (Handles PostgreSQL metadata registry):
+     ```bash
+     python manage.py startapp satellites
+     ```
+   * **telemetry** (Handles MongoDB telemetry log ingestion):
+     ```bash
+     python manage.py startapp telemetry
+     ```
+   * **connections** (Handles Redis geospatial caching and connection counters):
+     ```bash
+     python manage.py startapp connections
+     ```
+
+### 4. Database Setup & Configurations
+
+#### A. PostgreSQL Configuration
+Update `spaceinternet/settings.py` with your database credentials:
+```python
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'space_internet',
+        'USER': 'your_postgres_user',
+        'PASSWORD': 'your_postgres_password',
+        'HOST': 'localhost',
+        'PORT': '5432',
+    }
+}
+```
+
+#### B. MongoDB Configuration
+Create a service client config (e.g., `telemetry/mongo_client.py`):
+```python
+from pymongo import MongoClient
+from django.conf import settings
+
+client = MongoClient('mongodb://localhost:27017/')
+db = client['space_telemetry']
+```
+
+#### C. Redis Configuration
+Create a connection utility (e.g., `connections/redis_client.py`):
+```python
+import redis
+
+def get_redis_client():
+    return redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+```
+
+### 5. Define Models & Serializers
+1. Define your Postgres models (`Satellite`, `GroundStation`) in `satellites/models.py`. Refer to [satellite_registry.md](file:///Users/amolc/2026/spaceproject/docs/satellite_registry.md) for details.
+2. Build DRF serializers and views in `satellites/serializers.py` and `satellites/views.py`.
+3. Set up telemetry pipelines and API controllers under `telemetry/` and geospatial querying under `connections/`.
+
+### 6. Apply Database Migrations & Run
+1. Generate and execute PostgreSQL schema migrations:
+   ```bash
+   python manage.py makemigrations satellites
+   python manage.py migrate
+   ```
+2. Start the Django development server:
+   ```bash
+   python manage.py runserver
+   ```
+   The API endpoints will be accessible at `http://127.0.0.1:8000/api/`.
