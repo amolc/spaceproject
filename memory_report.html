@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Memory Usage Overview – SpaceProject</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+  body {
+    font-family: 'Inter', sans-serif;
+    background: linear-gradient(135deg, #1e1e2f, #2b2b3d);
+    color: #e0e0ff;
+    margin: 0;
+    padding: 2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+  .chart {
+    position: relative;
+    width: 80vw;
+    max-width: 800px;
+    height: 400px;
+    background: rgba(255,255,255,0.05);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+    overflow: hidden;
+  }
+  canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .legend {
+    margin-top: 1rem;
+    display: flex;
+    gap: 2rem;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.9rem;
+  }
+  .legend-color {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+  }
+  table {
+    margin-top: 2rem;
+    border-collapse: collapse;
+    width: 80vw;
+    max-width: 800px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  th, td {
+    padding: 0.8rem 1rem;
+    text-align: left;
+  }
+  th {
+    background: rgba(255,255,255,0.1);
+    font-weight: 600;
+  }
+  tr:nth-child(even) {
+    background: rgba(255,255,255,0.02);
+  }
+</style>
+</head>
+<body>
+<h1>Memory Usage Overview</h1>
+<p>RSS (Resident Set Size) reported by the launchers.</p>
+<div class="chart">
+  <canvas id="memChart"></canvas>
+</div>
+<div class="legend">
+  <div class="legend-item"><div class="legend-color" style="background:#ff6b6b"></div>start_django (CPython)</div>
+  <div class="legend-item"><div class="legend-color" style="background:#4ecdc4"></div>start_fastapi (CPython)</div>
+  <div class="legend-item"><div class="legend-color" style="background:#ffa502"></div>start_pypy_fastapi</div>
+  <div class="legend-item"><div class="legend-color" style="background:#1e90ff"></div>start_pypy_django</div>
+</div>
+<table>
+  <thead>
+    <tr><th>Launcher</th><th>Average RSS</th><th>Min RSS</th><th>Max RSS</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>start_django (CPython)</td><td>6.4 MiB</td><td>6.34 MiB</td><td>6.36 MiB</td></tr>
+    <tr><td>start_fastapi (CPython)</td><td>36.5 MiB</td><td>34.9 MiB</td><td>38.5 MiB</td></tr>
+    <tr><td>start_pypy_fastapi</td><td>63.0 MiB</td><td>57.5 MiB</td><td>68.5 MiB</td></tr>
+    <tr><td>start_pypy_django</td><td>22.6 MiB</td><td>22.56 MiB</td><td>22.56 MiB</td></tr>
+  </tbody>
+</table>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('memChart');
+    const ctx = canvas.getContext('2d');
+    const data = [
+      {label: 'start_django (CPython)', value: 6.36, color: '#ff6b6b'},
+      {label: 'start_fastapi (CPython)', value: 36.5, color: '#4ecdc4'},
+      {label: 'start_pypy_fastapi', value: 63.0, color: '#ffa502'},
+      {label: 'start_pypy_django', value: 22.56, color: '#1e90ff'}
+    ];
+    const maxVal = Math.max(...data.map(d => d.value)) * 1.1; // 10% headroom
+    const padding = 40;
+    const chartWidth = canvas.width = canvas.clientWidth;
+    const chartHeight = canvas.height = canvas.clientHeight;
+    const barWidth = (chartWidth - 2 * padding) / data.length / 1.5;
+    const gap = (chartWidth - 2 * padding - barWidth * data.length) / (data.length - 1);
+    // Draw axes
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding, padding);
+    ctx.lineTo(padding, chartHeight - padding);
+    ctx.lineTo(chartWidth - padding, chartHeight - padding);
+    ctx.stroke();
+    // Y‑axis labels
+    ctx.fillStyle = '#e0e0ff';
+    ctx.font = '12px Inter';
+    const steps = 5;
+    for (let i = 0; i <= steps; i++) {
+      const y = padding + (chartHeight - 2 * padding) * i / steps;
+      const val = (maxVal * (1 - i / steps)).toFixed(0);
+      ctx.fillText(val + ' MiB', 5, y + 4);
+      ctx.beginPath();
+      ctx.moveTo(padding - 4, y);
+      ctx.lineTo(padding, y);
+      ctx.stroke();
+    }
+    // Draw bars
+    data.forEach((d, i) => {
+      const x = padding + i * (barWidth + gap);
+      const barHeight = (d.value / maxVal) * (chartHeight - 2 * padding);
+      const y = chartHeight - padding - barHeight;
+      ctx.fillStyle = d.color;
+      ctx.fillRect(x, y, barWidth, barHeight);
+      // label under bar
+      ctx.fillStyle = '#e0e0ff';
+      ctx.textAlign = 'center';
+      ctx.fillText(d.label.split(' ')[0], x + barWidth / 2, chartHeight - padding + 15);
+    });
+  });
+</script>
+</body>
+</html>

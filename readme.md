@@ -9,7 +9,10 @@ This is the central repository for the **Space Internet Service Provider & Telem
 * [Relational Registry Component Detail](file:///Users/amolc/2026/spaceproject/docs/satellite_registry.md)
 * [Real-Time Orbital Tracking Detail](file:///Users/amolc/2026/spaceproject/docs/satellite_locations.md)
 * [High-Frequency Telemetry Detail](file:///Users/amolc/2026/spaceproject/docs/satellite_telemetry.md)
+* [System Testing Specification Detail](file:///Users/amolc/2026/spaceproject/docs/testing.md)
 * [Gap Analysis & Open Questions](file:///Users/amolc/2026/spaceproject/docs/questions.md)
+* [Project Enhancements & Suggestions](file:///Users/amolc/2026/spaceproject/docs/suggestions.md)
+* [Automatic Satellite Data Ingestion Guide](file:///Users/amolc/2026/spaceproject/docs/satellite_data_sources.md)
 
 ---
 
@@ -33,9 +36,9 @@ Ensure the following services are installed and running locally or in your envir
    ```bash
    source venv/bin/activate
    ```
-3. Install required packages (Django, Django REST Framework, database drivers, and helper libraries):
+3. Install required packages (Django, Django REST Framework, FastAPI, Uvicorn, database drivers, and helper libraries):
    ```bash
-   pip install django djangorestframework psycopg2-binary pymongo redis
+   pip install django djangorestframework psycopg2-binary pymongo redis fastapi uvicorn
    ```
 
 ### 3. Initialize the Django Project
@@ -56,6 +59,29 @@ Ensure the following services are installed and running locally or in your envir
      ```bash
      python manage.py startapp connections
      ```
+
+### 3.1 Initialize the FastAPI App
+Create a separate module directory `fastapi_app` for real-time, low-overhead ASGI processing:
+1. Create `fastapi_app/main.py`:
+   ```python
+   from fastapi import FastAPI
+   from fastapi.middleware.cors import CORSMiddleware
+   
+   app = FastAPI(title="Space Internet High-Frequency API")
+   
+   app.add_middleware(
+       CORSMiddleware,
+       allow_origins=["*"],
+       allow_credentials=True,
+       allow_methods=["*"],
+       allow_headers=["*"],
+   )
+   
+   @app.get("/api/orbit/nearest/")
+   async def get_nearest(lat: float, lon: float):
+       # High-speed Redis geospatial range lookup implementation
+       pass
+   ```
 
 ### 4. Database Setup & Configurations
 
@@ -104,8 +130,12 @@ def get_redis_client():
    python manage.py makemigrations satellites
    python manage.py migrate
    ```
-2. Start the Django development server:
+2. Start the Django development server (administrative CRUD & ORM on port 8000):
    ```bash
-   python manage.py runserver
+   python manage.py runserver 127.0.0.1:8000
    ```
-   The API endpoints will be accessible at `http://127.0.0.1:8000/api/`.
+3. Start the FastAPI development server (high-throughput endpoints & WebSockets on port 8001):
+   ```bash
+   uvicorn fastapi_app.main:app --host 127.0.0.1 --port 8001 --reload
+   ```
+   The administrative endpoints will be accessible at `http://127.0.0.1:8000/api/` and the high-speed telemetry/routing endpoints at `http://127.0.0.1:8001/api/`.

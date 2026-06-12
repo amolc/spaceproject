@@ -53,87 +53,111 @@ We deploy three distinct Redis structures, managed in [connections/orbit_service
 
 ---
 
-## 3. Core Algorithms & Operations
+## 3. Core Algorithms, Routing & Handovers
 
-### 3.1 Geospatial Line-Of-Sight Search
-To route connection requests, ground terminals run a nearest-satellite query:
-```python
-r.georadius(
-    'satellite_locations',
-    longitude=lon,
-    latitude=lat,
-    radius=radius_km,
-    unit='km',
-    withdist=True,
-    withcoord=True
-)
-```
-1. Redis performs a quick index range scan on the `satellite_locations` Sorted Set.
-2. It filters satellites falling within the radius circle using distance calculations (Haversine formula).
-3. The results are returned sorted from closest to farthest.
+### 3.1 Oblate Spheroid Line-of-Sight & Visibility Math
+Subscriber terminals and ground stations calculate satellite visibility using a WGS84 oblate spheroid model of the Earth (rather than a simple sphere) to accurately determine elevation angles:
+1. **Coordinate Conversion**: Convert the subscriber's geodetic coordinates (lat, lon, height) and the satellite's state vector (altitude, coordinates) to ECEF (Earth-Centered, Earth-Fixed) Cartesian coordinates.
+2. **Elevation Angle Calculation**: Calculate the local look-angle elevation vector. A satellite is only considered visible if its elevation angle exceeds the ground terminal's local horizon mask constraints (minimum of **10° elevation**). This filter accounts for atmospheric attenuation and physical obstructions.
 
-### 3.2 Thread-Safe Link Allocation
-When subscriber terminals request connection, the application calls `increment_active_connections`:
+### 3.2 Load-Balanced Multi-Hop ISL Routing
+Instead of routing directly to the closest satellite, the system models the constellation as a dynamic mesh network. The routing endpoint calculates paths across multiple inter-satellite links (ISLs) to find the optimal path to a landing ground station:
+1. **Dynamic Mesh Construction**: Build an in-memory graph where vertices are satellites/ground stations and edges are active intra-plane and inter-plane inter-satellite links (ISLs).
+2. **Edge Cost Calculation (Dijkstra / A\*)**: When routing packets, the algorithm uses Dijkstra or A* to compute the shortest path. Rather than static distance, edge weights are dynamic costs incorporating:
+   * **Proximity/Latency**: Physical length of the link (propagation delay).
+   * **Load Factor**: The ratio of current connections to capacity limit on the target satellite (using Redis `satellite_connections:{norad_id}`).
+   * **Bandwidth Capacity**: Avoid selecting satellites with degraded state or fully saturated link capacity.
+3. **Graceful Fallback**: If a path calculation fails or a routing link goes offline, the routing engine degrades gracefully, seeking alternative paths or falling back to single-hop landing ground stations.
+
+### 3.3 Thread-Safe Link Allocation & Session Management
+To register subscriber connections, the system executes atomic Redis increments:
 ```python
-def increment_active_connections(norad_id):
+def increment_active_connections(norad_id, capacity_limit):
     r = get_redis_client()
+    current = r.get(f"satellite_connections:{norad_id}")
+    if current and int(current) >= capacity_limit:
+        raise CapacityExceededError(f"Satellite {norad_id} is at peak capacity.")
+    # Atomic increment
     return r.incr(f"satellite_connections:{norad_id}")
 ```
-* **Thread Safety**: Because `INCR` is an atomic, single-threaded operations loop in Redis, it guarantees that concurrent link requests never trigger race conditions (e.g. over-subscribing a satellite beyond capacity).
+Using atomic `INCR` and `DECR` guarantees thread safety and prevents race conditions under high subscriber link traffic.
+
+### 3.4 Predictive Handover Logic
+Because satellites move relative to the ground terminal at ~7.8 km/s, connections drop as they sink below the 10° elevation threshold. 
+1. **Ascending/Descending Tracking**: The routing service tracks the elevation rate-of-change for overhead satellites.
+2. **Pre-Allocation**: When the active satellite's elevation drops below **12°**, the client queries the next rising satellite. The system pre-allocates connection resources on the rising satellite **before** the active link falls below the **10°** horizon, ensuring zero-packet-loss handover.
 
 ---
 
-## 4. Production Persistence Configuration
+## 4. Production Redis Configuration & Memory Bounds
 
-To guarantee no connection state or mapping details are lost during container recycles or server restarts, Redis is configured with:
-1. **Append-Only File (AOF)**: Enabled with `appendfsync everysec` for durability.
-2. **RDB Snapshots**: Standard background snapshotting configured as a secondary recovery route.
+To ensure high performance and prevent data loss, the Redis instance is configured as follows:
+
+### 4.1 Memory Limits and Eviction Policy
+* **Container Allocation**: Sized to support up to 5,000 active satellites, reserving **2 GB of RAM** to handle location cache, hashes, connection keys, and operational variables under maximum load.
+* **Maxmemory Configuration**:
+  ```text
+  maxmemory 2gb
+  maxmemory-policy volatile-lru
+  ```
+* **Why `volatile-lru`**: Keys with explicit TTLs (like hot coordinates that expire in 60 seconds) are evicted if Redis approaches its memory limit. Permanent configurations and active connection counts (which lack a TTL) are protected from sudden eviction, preventing routing corruption.
+
+### 4.2 Durability & Persistence Configuration
+To ensure state durability across restarts:
+1. **Append-Only File (AOF)**: Enabled with `appendfsync everysec` to ensure a maximum of 1 second of transactional write loss.
+2. **RDB Snapshots**: Standard background snapshots configured (e.g. `save 900 1`) as a fallback recovery path.
 
 ---
 
 ## 5. Sequence Diagram
 
-This sequence diagram illustrates real-time coordinate caching, geospatial radius routing lookup, and subscriber link increments:
+This sequence diagram illustrates real-time coordinate caching, load-balanced multi-hop routing, and predictive connection handovers served by FastAPI:
 
 ```mermaid
 sequenceDiagram
-    actor Sat as Satellite Terminal
-    participant Django as Django REST API
+    actor Term as Subscriber Terminal
+    participant FastAPI as FastAPI API Server
     participant Redis as Redis Cache
+    participant Router as Mesh Router Service
 
-    Note over Sat, Redis: Geospatial Positioning & Cache Workflow
+    Note over Term, Router: Geospatial Routing & Handover Workflow
 
-    Sat->>Django: POST /api/orbit/update/ (Lat/Lon/Altitude/Speed)
-    activate Django
-    Django->>Redis: GEOADD satellite_locations lon lat norad_id
+    Term->>FastAPI: GET /api/orbit/nearest/?lat=X&lon=Y
+    activate FastAPI
+    FastAPI->>Redis: GEORADIUS satellite_locations lon lat 1500 km withdist withcoord
     activate Redis
-    Redis-->>Django: Added/Updated
+    Redis-->>FastAPI: List of overhead satellites (NORAD IDs)
     deactivate Redis
-    Django->>Redis: HSET satellite_meta:norad_id mapping={lat, lon, alt, speed, updated_at}
-    activate Redis
-    Redis-->>Django: Success
-    deactivate Redis
-    Django-->>Sat: HTTP 200 OK (caching confirmed)
-    deactivate Django
-
-    actor User as Ground Station Terminal
-    User->>Django: GET /api/orbit/nearest/?lat=X&lon=Y&radius=Z
-    activate Django
-    Django->>Redis: GEORADIUS satellite_locations lon lat Z km withdist withcoord
-    activate Redis
-    Redis-->>Django: List of [norad_id, distance, coords]
-    deactivate Redis
-    loop for each norad_id
-        Django->>Redis: HGETALL satellite_meta:norad_id
-        activate Redis
-        Redis-->>Django: Metadata dict
-        deactivate Redis
-        Django->>Redis: GET satellite_connections:norad_id
-        activate Redis
-        Redis-->>Django: Counter value
-        deactivate Redis
+    
+    FastAPI->>Router: Calculate Optimal Path to Ground Station
+    activate Router
+    loop for each candidate satellite
+        Router->>Redis: HGETALL satellite_meta:norad_id
+        Router->>Redis: GET satellite_connections:norad_id
     end
-    Django-->>User: HTTP 200 OK (JSON nearest satellites with status/connections)
-    deactivate Django
+    Router->>Router: Compute path using A* (distance + link load)
+    Router-->>FastAPI: Optimized routing path (hops & ground station)
+    deactivate Router
+    FastAPI-->>Term: HTTP 200 OK (optimized path + hop parameters)
+    deactivate FastAPI
+
+    Note over Term, Redis: Predictive Handover Triggered (Elevation drops < 12 deg)
+    Term->>FastAPI: POST /api/connections/handover/ (pre-allocate rising satellite Z)
+    activate FastAPI
+    FastAPI->>Redis: INCR satellite_connections:Z
+    activate Redis
+    Redis-->>FastAPI: New connection count (within capacity limit)
+    deactivate Redis
+    FastAPI-->>Term: HTTP 200 OK (Handover Pre-allocated)
+    deactivate FastAPI
+    Term->>FastAPI: POST /api/connections/disconnect/ (tear down setting to old satellite Y)
+    activate FastAPI
+    FastAPI->>Redis: DECR satellite_connections:Y
+    activate Redis
+    Redis-->>FastAPI: Success
+    deactivate Redis
+    FastAPI-->>Term: HTTP 200 OK
+    deactivate FastAPI
 ```
+
 

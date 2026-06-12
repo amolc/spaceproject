@@ -67,19 +67,38 @@ We use Django REST Framework (DRF) to automatically build full CRUD REST endpoin
 
 ---
 
-## 4. Integrity and Performance Indexing
+## 4. Integrity, Performance Indexing, and Concurrency
 
-To guarantee system efficiency and avoid query performance degradation:
-1. **Unique Indices**: Django automatically creates unique indices on `norad_id` and `station_id` to guarantee no duplicate registries.
-2. **Search Indexing**: Standard query filters on `status` columns are supported. As the registry grows to thousands of elements, we should add a database index on `status` fields to optimize filtering speeds.
+To guarantee system efficiency, avoid query performance degradation, and prevent data corruption:
+
+### 4.1 Indexing and Constraints
+1. **Unique Indices**: Django automatically creates unique database indices on `norad_id` and `station_id` to ensure no duplicate registry records.
+2. **Search Indexing**: Standard query filters on `status` columns are supported. A composite index or individual indexes on `status` columns are declared in `class Meta` to optimize filtering speed as the constellation scale reaches thousands of nodes:
+   * `class Meta: indexes = [models.Index(fields=['status'])]`
 3. **Validation Constraints**: 
-   * Geolocation fields `latitude` and `longitude` are bounded in input serializers (e.g. latitude between -90 and 90, longitude between -180 and 185).
+   * Geolocation fields `latitude` and `longitude` are strictly bounded in the database models and input serializers:
+     * Latitude: `-90.0` to `90.0` degrees.
+     * Longitude: `-180.0` to `180.0` degrees.
+
+### 4.2 Concurrency Controls & Transactional Boundaries
+When GroundStation status shifts (e.g. to `OFFLINE`) or when subscriber link capacities are updated, the system handles writes inside a transaction block with lock-retry logic to prevent race conditions or deadlock failures:
+1. **Pessimistic Locking**: For ground-station link adjustments, Django uses `select_for_update()` to lock the row during database modification:
+   ```python
+   from django.db import transaction
+   
+   with transaction.atomic():
+       station = GroundStation.objects.select_for_update().get(station_id=sid)
+       # Perform safety checks and adjust allocation bandwidth
+       station.bandwidth_capacity_gbps = updated_capacity
+       station.save()
+   ```
+2. **Lock-Retry Middleware**: In high-contention scenarios, database serialization failures are caught by a middleware/utility decorator that retries transactions (up to 3 times with exponential backoff) if a database transaction conflict or deadlock is raised.
 
 ---
 
 ## 5. Sequence Diagram
 
-This sequence diagram illustrates the registration and retrieval workflow for the relational registries:
+This sequence diagram illustrates the registration and transactional update workflow for the relational registries:
 
 ```mermaid
 sequenceDiagram
@@ -87,11 +106,11 @@ sequenceDiagram
     participant Django as Django REST API
     participant PG as PostgreSQL DB
 
-    Note over Admin, PG: Satellite & Ground Station Registry CRUD Workflow
+    Note over Admin, PG: Satellite & Ground Station Registry CRUD & Locking Workflow
 
     Admin->>Django: POST /api/satellites/ (JSON metadata)
     activate Django
-    Django->>Django: Validate schema & values (inclination, altitude)
+    Django->>Django: Validate schema (Lat -90 to 90, Lon -180 to 180)
     Django->>PG: Query existing NORAD ID
     activate PG
     PG-->>Django: None found (safe to proceed)
@@ -103,13 +122,18 @@ sequenceDiagram
     Django-->>Admin: HTTP 201 Created (JSON serialized model)
     deactivate Django
 
-    Admin->>Django: GET /api/satellites/
+    Admin->>Django: POST /api/ground-stations/update-capacity/ (station_id, bandwidth)
     activate Django
-    Django->>PG: SELECT * FROM satellites_satellite
+    Django->>PG: BEGIN TRANSACTION & SELECT FOR UPDATE (lock station row)
     activate PG
-    PG-->>Django: Satellite Recordset
+    PG-->>Django: Locked Station Row
+    Django->>Django: Calculate current allocations
+    Django->>PG: UPDATE ground_station SET bandwidth_capacity_gbps = X
+    Django->>PG: COMMIT
+    PG-->>Django: Transaction Success (lock released)
     deactivate PG
-    Django-->>Admin: HTTP 200 OK (JSON array list)
+    Django-->>Admin: HTTP 200 OK
     deactivate Django
 ```
+
 

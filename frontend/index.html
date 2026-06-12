@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Space Internet & Telemetry Tracking Dashboard</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <!-- CesiumJS CDN -->
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js"></script>
+    <!-- Custom Style -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Immersive Full-Screen Cesium Globe Container -->
+    <div id="cesiumContainer"></div>
+
+    <!-- Floating Top Header Status Bar -->
+    <header class="floating-header">
+        <div class="logo">
+            <span class="pulse-indicator"></span>
+            <span class="title-bold">SPACE</span>INTERNET
+            <span class="sub-logo">DYNAMIC MESH DEMO</span>
+        </div>
+        
+        <div class="header-metrics">
+            <div class="header-metric interactive-metric" id="metric-stations">
+                <span class="lbl">GROUND STATIONS</span>
+                <span id="stat-stations-count" class="val text-yellow">0</span>
+            </div>
+            <div class="header-metric interactive-metric" id="metric-sats">
+                <span class="lbl">ACTIVE SATS</span>
+                <span id="stat-active-count" class="val text-cyan">0</span>
+            </div>
+            <div class="header-metric">
+                <span class="lbl">AVG CPU</span>
+                <span id="stat-avg-cpu" class="val">0%</span>
+            </div>
+            <div class="header-metric">
+                <span class="lbl">AVG TEMP</span>
+                <span id="stat-avg-temp" class="val">0°C</span>
+            </div>
+            <div class="header-metric">
+                <span class="lbl">THROUGHPUT</span>
+                <span id="stat-total-throughput" class="val">0.00 Gbps</span>
+            </div>
+        </div>
+
+        <div class="system-status">
+            <div class="status-indicator">
+                <span class="label">POSTGRES</span>
+                <span class="status-val online">ONLINE</span>
+            </div>
+            <div class="status-indicator">
+                <span class="label">REDIS</span>
+                <span class="status-val online">ONLINE</span>
+            </div>
+            <div class="status-indicator">
+                <span class="label">MONGODB</span>
+                <span class="status-val online">ONLINE</span>
+            </div>
+            <div class="status-indicator">
+                <span class="label">WS FEED</span>
+                <span id="ws-status" class="status-val offline">OFFLINE</span>
+            </div>
+            <div class="status-indicator border-left-indicator">
+                <span class="label">UTC TIME</span>
+                <span id="utc-clock" class="status-val font-mono">00:00:00</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Floating Map Control Widget -->
+    <div class="map-controls-card glass-panel">
+        <div class="controls-title font-mono">MAP LAYERS</div>
+        <div class="checkbox-group">
+            <label class="control-checkbox">
+                <input type="checkbox" id="layer-orbits" checked>
+                <span class="checkbox-label">Orbit Paths</span>
+            </label>
+            <label class="control-checkbox">
+                <input type="checkbox" id="layer-cones" checked>
+                <span class="checkbox-label">Coverage Cones</span>
+            </label>
+            <label class="control-checkbox">
+                <input type="checkbox" id="layer-stations" checked>
+                <span class="checkbox-label">Ground Stations</span>
+            </label>
+            <label class="control-checkbox">
+                <input type="checkbox" id="layer-sats" checked>
+                <span class="checkbox-label">Satellite Entities</span>
+            </label>
+        </div>
+        <button id="btn-reset-view" class="btn-control-reset">RESET VIEW</button>
+    </div>
+
+    <!-- Collapsible Left Sidebar Container -->
+    <div id="left-sidebar" class="floating-sidebar left">
+        <button id="btn-toggle-left" class="sidebar-toggle-btn">◀</button>
+        <div class="sidebar-content">
+            <!-- Ground Stations & Satellites Card -->
+            <div class="panel-card scrollable">
+                <div class="sidebar-tabs">
+                    <button id="tab-stations" class="tab-btn active">GROUND STATIONS</button>
+                    <button id="tab-satellites" class="tab-btn">ACTIVE SATS</button>
+                </div>
+                <div id="ground-stations-list" class="list-container">
+                    <div class="loading-text">Loading online landing stations...</div>
+                </div>
+                <div id="active-satellites-list" class="list-container hidden">
+                    <div class="loading-text">Loading active satellites...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Collapsible Right Sidebar Container -->
+    <div id="right-sidebar" class="floating-sidebar right">
+        <button id="btn-toggle-right" class="sidebar-toggle-btn">▶</button>
+        <div class="sidebar-content">
+            <!-- Diagnostics Card -->
+            <div class="panel-card">
+                <h2>SATELLITE DIAGNOSTICS</h2>
+                <div id="no-sat-selected" class="empty-state">
+                    <p>Click on any orbiting satellite to inspect real-time vitals and telemetry parameters.</p>
+                </div>
+                <div id="sat-telemetry-panel" class="telemetry-details hidden">
+                    <div class="sat-details-header">
+                        <span id="inspect-sat-name" class="sat-name">STARLINK-30302</span>
+                        <span id="inspect-sat-status" class="status-badge active">ACTIVE</span>
+                    </div>
+                    <div class="telemetry-gauge-container">
+                        <div class="gauge-card">
+                            <div class="gauge-title">BATTERY SOC</div>
+                            <div class="gauge-ring">
+                                <svg viewBox="0 0 36 36" class="circular-chart">
+                                    <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <path id="gauge-battery-path" class="circle" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <text id="gauge-battery-text" x="18" y="20.35" class="percentage font-mono">0%</text>
+                                </svg>
+                            </div>
+                        </div>
+                        <div class="gauge-card">
+                            <div class="gauge-title">CPU LOAD</div>
+                            <div class="gauge-ring">
+                                <svg viewBox="0 0 36 36" class="circular-chart">
+                                    <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <path id="gauge-cpu-path" class="circle warning" stroke-dasharray="0, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <text id="gauge-cpu-text" x="18" y="20.35" class="percentage font-mono">0%</text>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                    <ul class="telemetry-stats-list">
+                        <li>
+                            <span class="label">NORAD ID</span>
+                            <span id="inspect-norad-id" class="val font-mono">0</span>
+                        </li>
+                        <li>
+                            <span class="label">SPEED</span>
+                            <span id="inspect-speed" class="val font-mono">0.00 km/s</span>
+                        </li>
+                        <li>
+                            <span class="label">ALTITUDE</span>
+                            <span id="inspect-altitude" class="val font-mono">0.0 km</span>
+                        </li>
+                        <li>
+                            <span class="label">BATTERY TEMP</span>
+                            <span id="inspect-temp" class="val font-mono">0.0°C</span>
+                        </li>
+                        <li>
+                            <span class="label">SIGNAL STRENGTH</span>
+                            <span id="inspect-signal" class="val font-mono">0 dBm</span>
+                        </li>
+                        <li>
+                            <span class="label">BANDWIDTH SPEED</span>
+                            <span id="inspect-throughput" class="val font-mono">0.0 Mbps</span>
+                        </li>
+                        <li>
+                            <span class="label">ACTIVE TERMINALS</span>
+                            <span id="inspect-terminals" class="val font-mono">0</span>
+                        </li>
+                    </ul>
+                    <div class="sat-connections-subpanel">
+                        <div class="subpanel-title">Visible Landing Stations (3500km)</div>
+                        <ul id="inspect-visible-gs" class="connection-list font-mono">
+                            <li style="color: var(--text-muted); font-size: 9.5px; border: none; padding: 2px 0;">None in range</li>
+                        </ul>
+                        <div class="subpanel-title" style="margin-top: 8px;">ISL Neighbors (4500km)</div>
+                        <ul id="inspect-visible-isl" class="connection-list font-mono">
+                            <li style="color: var(--text-muted); font-size: 9.5px; border: none; padding: 2px 0;">None in range</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Routing Card -->
+            <div class="panel-card">
+                <h2>ROUTING PLANNER (DIJKSTRA)</h2>
+                <p class="section-desc">Test dynamic multi-hop routing from a user terminal to a ground station.</p>
+                <div class="form-group">
+                    <label>USER TERMINAL LATITUDE</label>
+                    <input id="route-lat" type="number" step="0.0001" value="10.3500">
+                </div>
+                <div class="form-group">
+                    <label>USER TERMINAL LONGITUDE</label>
+                    <input id="route-lon" type="number" step="0.0001" value="80.2000">
+                </div>
+                <button id="btn-calc-route" class="btn-action">CALCULATE OPTIMAL ROUTE</button>
+                
+                <div id="route-result-container" class="route-results hidden">
+                    <h3>ROUTE SUMMARY</h3>
+                    <div class="routing-metric">
+                        <span>TOTAL COST:</span>
+                        <span id="route-val-cost" class="font-mono text-cyan">0.00</span>
+                    </div>
+                    <div class="routing-metric">
+                        <span>TOTAL HOPS:</span>
+                        <span id="route-val-hops" class="font-mono">0</span>
+                    </div>
+                    <div class="route-hops-list">
+                        <ul id="route-hops-list-items">
+                            <!-- Populated dynamically -->
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Live Logs Feed (Appears at absolute bottom) -->
+    <footer class="floating-logs-card glass-panel">
+        <div class="logs-header font-mono">
+            <span class="pulse-indicator-small"></span>
+            <span>LIVE TELEMETRY INGESTION STREAM (MONGODB WATCH)</span>
+        </div>
+        <div id="logs-container" class="logs-feed font-mono">
+            <div class="log-line system-msg">[SYSTEM] Listening for live satellite telemetry signals...</div>
+        </div>
+    </footer>
+
+    <!-- Application Logic -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
